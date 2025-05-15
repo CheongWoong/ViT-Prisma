@@ -752,6 +752,8 @@ class HookedViT(HookedRootModule):
         default_padding_side: Optional[Literal["left", "right"]] = "right",
         dtype="float32",
         use_attn_result: Optional[bool] = False,
+        new_head_state_dict=None,
+        num_classes=None,
         **from_pretrained_kwargs,
     ) -> "HookedViT":
         assert not (
@@ -782,9 +784,11 @@ class HookedViT(HookedRootModule):
             is_timm=is_timm,
             is_clip=is_clip,
         )
+        if num_classes is not None:
+            cfg.n_classes = num_classes
 
         state_dict = get_pretrained_state_dict(
-            model_name, is_timm, is_clip, cfg, hf_model, dtype=dtype, return_old_state_dict=True, **from_pretrained_kwargs
+            model_name, is_timm, is_clip, cfg, hf_model, dtype=dtype, return_old_state_dict=True, new_head_state_dict=new_head_state_dict, num_classes=num_classes, **from_pretrained_kwargs
         )
 
         model = cls(cfg, move_to_device=False)

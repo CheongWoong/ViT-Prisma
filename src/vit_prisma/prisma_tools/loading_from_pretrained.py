@@ -487,6 +487,8 @@ def get_pretrained_state_dict(
     hf_model=None,
     dtype: torch.dtype = torch.float32,
     return_old_state_dict=False,
+    new_head_state_dict=None,
+    num_classes=None,
     **kwargs,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -517,10 +519,18 @@ def get_pretrained_state_dict(
     try:
         print("Official model name", official_model_name)
         if is_timm:
-            hf_model = hf_model if hf_model is not None else timm.create_model(official_model_name, pretrained=True)
+            if num_classes is not None:
+                hf_model = hf_model if hf_model is not None else timm.create_model(official_model_name, pretrained=True, num_classes=num_classes)
+            else:
+                hf_model = hf_model if hf_model is not None else timm.create_model(official_model_name, pretrained=True)
             for param in hf_model.parameters():
                 param.requires_grad = False
-            state_dict = convert_timm_weights(hf_model.state_dict(), cfg)
+            old_state_dict = hf_model.state_dict()
+            if new_head_state_dict is not None:
+                for k, v in new_head_state_dict.items():
+                    assert k in old_state_dict
+                    old_state_dict[k] = v
+            state_dict = convert_timm_weights(old_state_dict, cfg)
         elif is_clip and official_model_name.startswith("open-clip:"):
             print("Converting OpenCLIP weights")
             checkpoint_path = download_pretrained_from_hf(remove_open_clip_prefix(official_model_name), filename='open_clip_pytorch_model.bin')
@@ -630,22 +640,22 @@ def convert_pretrained_model_config(model_name: str, is_timm: bool = True, is_cl
         ps = hf_config.tubelet_size[1]
 
     pretrained_config = {
-                    'n_layers' : hf_config.num_hidden_layers,
-                    'd_model' : hf_config.hidden_size,
-                    'd_head' : hf_config.hidden_size // hf_config.num_attention_heads,
-                    'model_name' : hf_config._name_or_path,
-                    'n_heads' : hf_config.num_attention_heads,
-                    'd_mlp' : hf_config.intermediate_size,
-                    'activation_name' : hf_config.hidden_act,
-                    'eps' : hf_config.layer_norm_eps,
-                    'original_architecture' : getattr(hf_config, 'architecture', getattr(hf_config, 'architectures', None)),
-                    'initializer_range' : hf_config.initializer_range,
-                    'n_channels' : hf_config.num_channels,
-                    'patch_size' : ps,
-                    'image_size' : hf_config.image_size,
-                    'n_classes' : getattr(hf_config, "num_classes", None),
-                    'n_params' : sum(p.numel() for p in model.parameters() if p.requires_grad) if is_timm else None,
-                }
+            'n_layers' : hf_config.num_hidden_layers if not is_timm else len(model.blocks),
+            'd_model' : hf_config.hidden_size if not is_timm else model.embed_dim,
+            'd_head' : hf_config.hidden_size // hf_config.num_attention_heads if not is_timm else model.embed_dim // model.blocks[0].attn.num_heads,
+            'model_name' : hf_config._name_or_path,
+            'n_heads' : hf_config.num_attention_heads if not is_timm else model.blocks[0].attn.num_heads,
+            'd_mlp' : hf_config.intermediate_size if not is_timm else 4 * model.embed_dim,
+            'activation_name' : hf_config.hidden_act if not is_timm else model.blocks[0].mlp.act.__class__.__name__.lower(),
+            'eps' : getattr(hf_config, 'layer_norm_eps', 1e-12),
+            'original_architecture' : getattr(hf_config, 'architecture', getattr(hf_config, 'architectures', None)),
+            'initializer_range' : hf_config.initializer_range,
+            'n_channels' : hf_config.num_channels if not is_timm else model.patch_embed.proj.weight.shape[1],
+            'patch_size' : ps if not is_timm else model.patch_embed.proj.kernel_size[0],
+            'image_size' : hf_config.image_size if not is_timm else model.default_cfg['input_size'][1],
+            'n_classes' :  getattr(hf_config, "num_classes", None) if not is_timm else model.default_cfg['num_classes'],
+            'n_params' : sum(p.numel() for p in model.parameters() if p.requires_grad) if is_timm else None,
+        }
     
     # Rectifying Huggingface bugs:
     # Currently a bug getting configs, only this model confirmed to work and even it requires modification of eps
